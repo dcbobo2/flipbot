@@ -4,7 +4,7 @@ import logging
 import os
 import re
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import discord
 import requests
@@ -92,9 +92,30 @@ def create_flipstats_embed(player, data, days):
 
     return embed
 
+def check_inconsistent_time_patterns(flips):
+    off_hours = set([22, 23, 0, 1, 2, 3, 4, 5])  # 10 pm to 5 am EST
+
+    purchase_count_per_night = {}
+
+    for flip in flips:
+        buy_time = format_datetime_iso(flip["buyTime"])
+        hour = buy_time.hour
+
+        if hour in off_hours:
+            date_key = buy_time.date()
+
+            if date_key in purchase_count_per_night:
+                purchase_count_per_night[date_key] += 1
+            else:
+                purchase_count_per_night[date_key] = 1
+
+    inconsistent_night_count = sum(1 for count in purchase_count_per_night.values() if count >= 3)
+
+    return inconsistent_night_count >= 4
+
 # API and configuration
 
-HYPIXEL_API_KEY = os.environ['TEMP_API_KEY']
+HYPIXEL_API_KEY = os.environ['TEMP_API_KEY'] #hypixel hasnt approve my api key yet :(
 HYPIXEL_API_BASE_URL = 'https://api.hypixel.net' # I'm lazy, no bully
 
 # Commands
@@ -201,6 +222,22 @@ async def macrocheck(ctx, player):
 
         trading_value = total_profit * PROFIT_FACTOR / 1000000
 
+        one_month_ago = datetime.utcnow() - timedelta(days=30)
+        one_month_ago_timestamp = int(one_month_ago.timestamp())
+
+        url = f'https://api.mojang.com/users/profiles/minecraft/{player}?at={one_month_ago_timestamp}'
+        response = requests.get(url)
+
+        if response.status_code == 200:
+            account_age = "older than 30 days"
+        elif response.status_code == 204:
+            account_age = "new account"
+        else:
+            account_age = "unknown"
+
+       # Check for inconsistent time patterns
+        has_inconsistent_time_patterns = check_inconsistent_time_patterns(flips)
+
         embed = discord.Embed(
             title=f'Macro-Check Results for {player} (Last 7 Days)',
             color=discord.Color.red() if macroing_percentage >= 50 else discord.Color.green()
@@ -209,6 +246,9 @@ async def macrocheck(ctx, player):
         embed.add_field(name="Profit (IRL Trading Value)", value=f'${trading_value:.2f}', inline=False)
         embed.add_field(name="Total Flipping Hours", value=f"{total_flipping_hours} hours", inline=False)
         embed.add_field(name="Average Reaction Time (**BETA FEATURE**)", value=f"{average_reaction_time:.2f} minutes{reaction_time_flag}", inline=False)
+        embed.add_field(name="Inconsistent Time Pattern (**BETA FEATURE**)", value="Detected" if has_inconsistent_time_patterns else "Not Detected", inline=False)
+        embed.add_field(name="Account Age (**BETA FEATURE**)", value=account_age, inline=False)
+        
         embed.set_footer(text="Disclaimer: These results are not definitive proof of macroing. They are an indication based on available data.")
 
         macroing_embed = discord.Embed(
@@ -239,10 +279,9 @@ async def help(ctx):
     commands_list = [
         ("`/flipstats <player>`", "Sends information of a flipper."),
         ("`/macrocheck <player>`", "Check if a player is macroing flips."),
-        # Add more commands and descriptions here
     ]
 
-    # Credits for APIs and bot creator
+    # Credits for APIs and bot creator (im such a good person!!!)
     credits = (
         "This bot uses data from Mojang API, Coflsky API, and Hypixel API to provide information.\n"
         "Mojang API: https://api.mojang.com/\n"
